@@ -12,15 +12,14 @@ s3 = boto3.client('s3')
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# Environment variables injected by Terraform
+# Environment variables
 TABLE_NAME = os.environ['DYNAMODB_TABLE_NAME']
 BUCKET_NAME = os.environ['S3_BUCKET_NAME']
 table = dynamodb.Table(TABLE_NAME)
 
 def handler(event, context):
     """
-    Idempotent Event Processor.
-    Ensures exactly-once processing using DynamoDB Conditional Writes.
+    Idempotent Event Processor with Lease Expiration.
     """
     batch_item_failures = []
     
@@ -32,36 +31,39 @@ def handler(event, context):
             sensor_id = body.get("sensor")
             
             current_time = int(time.time())
-            # TTL: 30 seconds
-            ttl_time = current_time + 30
+            
+            # CONFIGURATION:
+            # Lease Duration: 2 minutes (How long we trust a lock)
+            # TTL: 24 hours (When DynamoDB should delete the record to save money)
+            lease_seconds = 30
+            stale_cutoff = current_time - lease_seconds
+            ttl_time = current_time + 86400 
 
-            # --- 1. THE GATEKEEPER (Optimistic Locking) ---
+            # --- 1. THE GATEKEEPER ---
             try:
-                # Attempt to write lock. Fails if 'pk' already exists.
                 table.put_item(
                     Item={
                         'pk': f"EVENT#{event_id}",
                         'sk': 'METADATA',
                         'status': 'PROCESSING',
                         'sensor': sensor_id,
-                        'timestamp': current_time,
-                        'ttl': ttl_time 
+                        'timestamp': current_time, # Critical for the check
+                        'ttl': ttl_time
                     },
-                    ConditionExpression='attribute_not_exists(pk)'
+                    # THE FIX: 
+                    # "Write if it doesn't exist OR if the existing one is older than 30 seconds"
+                    ConditionExpression='attribute_not_exists(pk) OR #ts < :stale_limit',
+                    ExpressionAttributeNames={'#ts': 'timestamp'},
+                    ExpressionAttributeValues={':stale_limit': stale_cutoff}
                 )
                 logger.info(f"Lock acquired for {event_id}. Processing...")
                 
             except ClientError as e:
                 if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
-                    logger.warning(f"DUPLICATE PREVENTED: {event_id} already exists.")
-                    # We return SUCCESS to SQS so it deletes this duplicate message.
+                    logger.warning(f"DUPLICATE PREVENTED: {event_id} is locked and active.")
                     continue 
                 else:
                     raise e
-
-            if event_id == "zombie_test_001":
-                            logger.error("Simulating crash")
-                            raise Exception("OOM")
 
             # --- 2. Write to S3 ---
             s3_key = f"raw/{event_id}.json"
@@ -74,7 +76,6 @@ def handler(event, context):
             logger.info(f"Payload persisted to s3://{BUCKET_NAME}/{s3_key}")
 
             # --- 3. STATE UPDATE ---
-            # Mark as COMPLETED. 
             table.update_item(
                 Key={'pk': f"EVENT#{event_id}", 'sk': 'METADATA'},
                 UpdateExpression="SET #s = :status",
@@ -84,7 +85,6 @@ def handler(event, context):
 
         except Exception as e:
             logger.error(f"FAILED to process message {message_id}: {str(e)}")
-            # Return failure to SQS so it can retry LATER
             batch_item_failures.append({"itemIdentifier": message_id})
 
     return {"batchItemFailures": batch_item_failures}
