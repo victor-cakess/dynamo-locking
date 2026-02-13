@@ -77,4 +77,5 @@ module "compute" {
   sqs_queue_arn       = module.messaging.queue_arn
   dynamodb_table_name = module.storage.dynamodb_table_name
   s3_bucket_name      = module.storage.s3_bucket_name
+  lambda_source_file = "${path.root}/../local-lambda/handler.py"
 }

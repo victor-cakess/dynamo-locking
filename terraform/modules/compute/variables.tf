@@ -42,3 +42,8 @@ variable "s3_bucket_name" {
   description = "Name of the S3 ingestion data bucket"
   type        = string
 }
+
+variable "lambda_source_file" {
+  description = "The absolute or relative path to the Python handler file"
+  type        = string
+}

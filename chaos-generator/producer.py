@@ -24,7 +24,7 @@ def send_reading(event_id, voltage):
 
 def simulate_chaos():
     # We intentionally use the same event_id to create a race condition.
-    duplicate_event_id = "grid_stress_999"
+    duplicate_event_id = "zombie_test_001"
     
     print("Initiating thundering herd test...")
     with ThreadPoolExecutor(max_workers=50) as executor:

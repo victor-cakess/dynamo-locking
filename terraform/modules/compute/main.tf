@@ -1,35 +1,21 @@
-data "archive_file" "lambda_placeholder" {
+data "archive_file" "lambda_package" {
   type        = "zip"
-  output_path = "${path.module}/.build/lambda_placeholder.zip"
-
-  source {
-    content  = <<-PYTHON
-      import json
-      import logging
-
-      logger = logging.getLogger()
-      logger.setLevel(logging.INFO)
-
-      def handler(event, context):
-          """Placeholder Lambda handler for deduplication engine."""
-          for record in event.get("Records", []):
-              body = json.loads(record["body"])
-              logger.info("Processing event_id=%s sensor=%s", body.get("event_id"), body.get("sensor"))
-          return {"statusCode": 200, "processedRecords": len(event.get("Records", []))}
-    PYTHON
-    filename = "handler.py"
-  }
+  source_file = var.lambda_source_file  
+  output_path = "${path.module}/.build/lambda_dedup.zip"
 }
 
 resource "aws_lambda_function" "deduplication_processor" {
   function_name    = "${var.resource_prefix}-dedup-processor"
   role             = var.lambda_role_arn
-  handler          = "handler.handler"
+  handler          = "handler.handler" # This remains the same because the file inside the zip is still handler.py
   runtime          = var.lambda_runtime
   timeout          = var.lambda_timeout
   memory_size      = var.lambda_memory_size
-  filename         = data.archive_file.lambda_placeholder.output_path
-  source_code_hash = data.archive_file.lambda_placeholder.output_base64sha256
+  
+  # --- UPDATED REFERENCES ---
+  filename         = data.archive_file.lambda_package.output_path
+  source_code_hash = data.archive_file.lambda_package.output_base64sha256
+  # --------------------------
 
   environment {
     variables = {
